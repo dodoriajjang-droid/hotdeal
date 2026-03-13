@@ -3,22 +3,27 @@ import cloudscraper
 from bs4 import BeautifulSoup
 from datetime import datetime
 import pytz
-import re  # 문자열(시간) 추출 필살기
+import re
 
-# 1. 한국 시간(KST) 및 오늘 날짜 설정
 def get_kst_today():
-    kst = pytz.timezone('Asia/Seoul')
-    return datetime.now(kst).strftime('%Y-%m-%d')
+    return datetime.now(pytz.timezone('Asia/Seoul')).strftime('%Y-%m-%d')
 
 def fetch_deals():
     results = []
-    scraper = cloudscraper.create_scraper()
+    # 접속 성공 여부를 기록할 현황판 딕셔너리
+    status = {
+        '뽐뿌': '🔴 실패/차단', 
+        '퀘이사존': '🔴 실패/차단', 
+        '아카라이브': '🔴 실패/차단', 
+        '에펨코리아': '🔴 실패/차단'
+    }
     
+    scraper = cloudscraper.create_scraper()
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
-    # --- [1] 뽐뿌 크롤링 (정규식 필살기 적용) ---
+    # --- [1] 뽐뿌 크롤링 ---
     try:
         pp_url = "https://www.ppomppu.co.kr/zboard/zboard.php?id=ppomppu"
         res = scraper.get(pp_url, headers=headers, timeout=10)
@@ -27,28 +32,36 @@ def fetch_deals():
             html = res.content.decode('euc-kr', 'replace')
             soup = BeautifulSoup(html, 'html.parser')
             
-            rows = soup.find_all('tr')
+            # 뽐뿌의 진짜 게시글 줄인 list0, list1만 정확히 타겟팅
+            rows = soup.find_all('tr', class_=['list0', 'list1'])
+            count = 0
+            
             for row in rows:
-                # 1. 'zboard.php?id=ppomppu&no=' 가 포함된 진짜 게시글 링크만 찾기
-                title_a = None
-                for a in row.find_all('a'):
-                    if 'id=ppomppu&no=' in a.get('href', '') and a.text.strip():
-                        title_a = a
-                        break
+                title_tag = row.select_one('font.list_title')
+                if not title_tag: continue
                 
-                if title_a:
-                    # 2. 클래스 이름 다 무시하고 텍스트 전체에서 시간(00:00:00 또는 00:00)만 강제 추출
-                    row_text = row.text.replace('\n', ' ')
-                    time_match = re.search(r'\b(\d{2}:\d{2}:\d{2})\b', row_text) or re.search(r'\b(\d{2}:\d{2})\b', row_text)
-                    
-                    if time_match:
-                        title = title_a.text.strip()
-                        link = "https://www.ppomppu.co.kr/zboard/" + title_a['href']
-                        results.append({'site': '뽐뿌', 'title': title, 'link': link, 'time': time_match.group(1)})
+                a_tag = title_tag.find_parent('a')
+                if not a_tag: continue
+                
+                title = title_tag.text.strip()
+                link = "https://www.ppomppu.co.kr/zboard/" + a_tag['href']
+                
+                # 시간 찾기 (td 태그 중 'eng' 클래스를 가진 곳에 ':'이 있으면 무조건 시간)
+                time_str = ""
+                for td in row.find_all('td', class_='eng'):
+                    if ':' in td.text:
+                        time_str = td.text.strip()
+                        break
+                        
+                if time_str:
+                    results.append({'site': '뽐뿌', 'title': title, 'link': link, 'time': time_str})
+                    count += 1
+            
+            status['뽐뿌'] = f"🟢 성공 ({count}개)" if count > 0 else "🟡 파싱 실패 (구조변경)"
         else:
-            st.error(f"뽐뿌 접속 실패: 응답 코드 {res.status_code}")
+            status['뽐뿌'] = f"🔴 차단됨 ({res.status_code})"
     except Exception as e:
-        st.error(f"뽐뿌 크롤링 중 에러 발생: {e}")
+        status['뽐뿌'] = f"🔴 에러: {str(e)[:15]}"
 
     # --- [2] 퀘이사존 크롤링 ---
     try:
@@ -58,6 +71,7 @@ def fetch_deals():
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             links = soup.select('a.subject-link')
+            count = 0
             
             for a_tag in links:
                 title_tag = a_tag.select_one('.tit')
@@ -71,81 +85,94 @@ def fetch_deals():
                         time_str = time_tag.text.strip()
                         if ":" in time_str or "전" in time_str:
                             results.append({'site': '퀘이사존', 'title': title, 'link': link, 'time': time_str})
+                            count += 1
+            status['퀘이사존'] = f"🟢 성공 ({count}개)" if count > 0 else "🟡 파싱 실패"
+        else:
+            status['퀘이사존'] = f"🔴 차단됨 ({res.status_code})"
     except Exception as e:
-        st.error(f"퀘이사존 크롤링 중 에러 발생: {e}")
+        status['퀘이사존'] = f"🔴 에러: {str(e)[:15]}"
 
-    # --- [3] 아카라이브 (핫딜 채널) 크롤링 ---
+    # --- [3] 아카라이브 크롤링 ---
     try:
         arca_url = "https://arca.live/b/hotdeal"
         res = scraper.get(arca_url, headers=headers, timeout=10)
         
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            # 공지사항(.notice) 제외하고 일반 글(.vrow)만 가져오기
-            rows = soup.select('.vrow:not(.notice)') 
+            rows = soup.select('.vrow:not(.notice)')
+            count = 0
+            
             for row in rows:
                 title_tag = row.select_one('.title')
                 if title_tag:
                     title = title_tag.text.strip()
                     a_tag = row.select_one('a')
-                    if a_tag and 'href' in a_tag.attrs:
-                        link = "https://arca.live" + a_tag['href']
-                        
+                    if a_tag:
+                        link = "https://arca.live" + a_tag.get('href', '')
                         time_tag = row.select_one('time')
-                        if time_tag:
-                            time_str = time_tag.text.strip()
-                            if ":" in time_str: # 아카라이브도 당일 글은 14:20 형태로 나옴
-                                results.append({'site': '아카라이브', 'title': title, 'link': link, 'time': time_str})
+                        if time_tag and ":" in time_tag.text:
+                            results.append({'site': '아카라이브', 'title': title, 'link': link, 'time': time_tag.text.strip()})
+                            count += 1
+            status['아카라이브'] = f"🟢 성공 ({count}개)" if count > 0 else "🟡 봇 차단(Captcha) 의심"
+        else:
+            status['아카라이브'] = f"🔴 차단됨 ({res.status_code})"
     except Exception as e:
-        st.error(f"아카라이브 크롤링 중 에러 발생: {e}")
+        status['아카라이브'] = f"🔴 에러: {str(e)[:15]}"
 
-    # --- [4] 에펨코리아 (핫딜 게시판) 크롤링 ---
+    # --- [4] 에펨코리아 크롤링 ---
     try:
         fm_url = "https://www.fmkorea.com/hotdeal"
         res = scraper.get(fm_url, headers=headers, timeout=10)
         
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            rows = soup.select('tr') # 펨코는 테이블 구조 사용
+            rows = soup.select('tr')
+            count = 0
+            
             for row in rows:
                 title_td = row.select_one('td.title')
                 if title_td:
                     a_tag = title_td.select_one('a')
                     if a_tag:
-                        # 댓글 수 등 불필요한 공백 제거
                         title = re.sub(r'\s+', ' ', a_tag.text).strip()
-                        
-                        # 링크 조합
                         href = a_tag['href']
                         link = "https://www.fmkorea.com" + href if href.startswith('/') else href
                         
                         time_td = row.select_one('td.time')
-                        if time_td:
-                            time_str = time_td.text.strip()
-                            if ":" in time_str:
-                                results.append({'site': '에펨코리아', 'title': title, 'link': link, 'time': time_str})
+                        if time_td and ":" in time_td.text:
+                            results.append({'site': '에펨코리아', 'title': title, 'link': link, 'time': time_td.text.strip()})
+                            count += 1
+            status['에펨코리아'] = f"🟢 성공 ({count}개)" if count > 0 else "🟡 봇 차단(Captcha) 의심"
+        else:
+            status['에펨코리아'] = f"🔴 차단됨 ({res.status_code})"
     except Exception as e:
-        st.error(f"에펨코리아 크롤링 중 에러 발생: {e}")
+        status['에펨코리아'] = f"🔴 에러: {str(e)[:15]}"
 
-    return results
+    return results, status
 
 # --- Streamlit UI ---
 st.set_page_config(page_title="실시간 핫딜 모니터링", layout="wide")
-st.title("🔥 오늘의 실시간 핫딜 (KST 기준)")
+st.title("🔥 통합 실시간 핫딜 모니터링")
 
 kst_now = datetime.now(pytz.timezone('Asia/Seoul')).strftime('%Y-%m-%d %H:%M:%S')
-st.caption(f"서버 데이터 갱신 시간: {kst_now}")
+st.caption(f"최근 갱신 시간: {kst_now} (KST)")
 
 if st.button('🔄 새로고침'):
     st.rerun()
 
-with st.spinner('4개 커뮤니티의 핫딜 정보를 긁어오는 중입니다... 🚀'):
-    data = fetch_deals()
+with st.spinner('4개 커뮤니티 데이터를 가져오는 중입니다... 🚀'):
+    data, status = fetch_deals()
+
+# 📊 사이트별 상태 현황판 출력 (가장 중요)
+st.subheader("📡 사이트별 수집 현황")
+cols = st.columns(4)
+cols[0].info(f"🔵 뽐뿌\n\n**{status['뽐뿌']}**")
+cols[1].success(f"🟠 퀘이사존\n\n**{status['퀘이사존']}**")
+cols[2].warning(f"🟢 아카라이브\n\n**{status['아카라이브']}**")
+cols[3].error(f"🟣 에펨코리아\n\n**{status['에펨코리아']}**")
+st.divider()
 
 if data:
-    st.success(f"총 {len(data)}개의 당일 핫딜을 불러왔습니다!")
-    
-    # 사이트별로 태그 색상을 다르게 주기 위한 딕셔너리
     site_colors = {
         '뽐뿌': '🔵 뽐뿌',
         '퀘이사존': '🟠 퀘이사존',
@@ -156,10 +183,9 @@ if data:
     for item in data:
         with st.container():
             col1, col2, col3 = st.columns([1.5, 6, 1])
-            # 사이트 이름 출력
             col1.write(f"**{site_colors.get(item['site'], item['site'])}**")
             col2.markdown(f"[{item['title']}]({item['link']})")
             col3.write(f"🕒 {item['time']}")
             st.divider()
 else:
-    st.warning("현재 올라온 당일 게시글이 없거나 데이터를 파싱하지 못했습니다.")
+    st.warning("불러온 데이터가 없습니다. 상단의 상태 현황판을 확인해 주세요.")
