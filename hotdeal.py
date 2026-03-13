@@ -2,17 +2,18 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
+from datetime import datetime
 
 # --- Streamlit UI 기본 설정 ---
 st.set_page_config(layout="wide")
-st.title("🔥 실시간 핫딜 모아보기")
+st.title("🔥 당일 실시간 핫딜 모아보기")
 
 # --- 크롤링 함수 ---
-@st.cache_data(ttl=300) # 5분 동안 데이터 캐싱 (서버 차단 방지)
+@st.cache_data(ttl=300) # 5분 동안 데이터 캐싱
 def get_hot_deals():
     deals = []
     
-    # 1. 뽐뿌 크롤링 (차단 우회를 위한 헤더 및 인코딩 설정)
+    # 1. 뽐뿌 크롤링 (차단 우회 및 당일 필터링)
     ppomppu_url = "https://www.ppomppu.co.kr/zboard/zboard.php?id=ppomppu"
     ppomppu_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -23,23 +24,39 @@ def get_hot_deals():
     
     try:
         res_p = requests.get(ppomppu_url, headers=ppomppu_headers, timeout=10)
-        res_p.encoding = 'euc-kr' # 뽐뿌 특유의 한글 깨짐 방지
+        res_p.encoding = 'euc-kr' 
         res_p.raise_for_status()
         
         soup_p = BeautifulSoup(res_p.text, 'html.parser')
         rows = soup_p.select("tr.list1, tr.list0")
         
         for row in rows:
-            title_tag = row.select_one("font.list_title")
-            a_tag = row.select_one("a")
-            if title_tag and a_tag:
-                title = title_tag.text.strip()
-                link = "https://www.ppomppu.co.kr/zboard/" + a_tag['href']
+            # 제목과 링크 찾기 (더 강력한 방식으로 수정)
+            a_tag = None
+            for a in row.select("a"):
+                href = a.get("href", "")
+                if "id=ppomppu" in href and "no=" in href:
+                    if a.text.strip() and not a.find("img"): # 텍스트가 있는 링크만 추출
+                        a_tag = a
+                        break
+            
+            if not a_tag:
+                continue
+                
+            title = a_tag.text.strip()
+            link = "https://www.ppomppu.co.kr/zboard/" + a_tag['href']
+            
+            # 당일 글인지 확인 (뽐뿌는 오늘 글이면 'HH:MM:SS' 형식으로 콜론(:)이 들어감)
+            td_date = row.select_one("td.eng.list_vspace")
+            date_text = td_date.text.strip() if td_date else row.text
+            
+            if ":" in date_text: # 오늘 올라온 글만 추가
                 deals.append({"출처": "뽐뿌", "상품명": title, "게시글 링크": link})
+                
     except Exception as e:
         st.error(f"뽐뿌 크롤링 실패: {e}")
 
-    # 2. 퀘이사존 크롤링 (IT/하드웨어 특화)
+    # 2. 퀘이사존 크롤링 (당일 필터링)
     quasar_url = "https://quasarzone.com/bbs/qb_saleinfo"
     quasar_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -50,25 +67,39 @@ def get_hot_deals():
         res_q.raise_for_status()
         soup_q = BeautifulSoup(res_q.text, 'html.parser')
         
-        items = soup_q.select(".market-info-list-cont p.tit a")
+        items = soup_q.select(".market-info-list-cont")
         for item in items:
             title_span = item.select_one("span.ellipsis-with-reply-cnt")
-            if title_span:
-                title = title_span.text.strip()
-                link = "https://quasarzone.com" + item['href']
+            if not title_span: continue
+            title = title_span.text.strip()
+            
+            # 링크 찾기
+            a_tag = item.select_one("a.subject-link") or item.select_one("p.tit a")
+            if not a_tag: continue
+            link = "https://quasarzone.com" + a_tag['href']
+            
+            # 당일 글인지 확인 (퀘이사존은 오늘 글이면 'HH:MM' 형식으로 콜론(:)이 들어감)
+            date_span = item.select_one("span.date")
+            if not date_span: continue
+            date_text = date_span.text.strip()
+            
+            if ":" in date_text: # 오늘 올라온 글만 추가
                 deals.append({"출처": "퀘이사존", "상품명": title, "게시글 링크": link})
+                
     except Exception as e:
         st.error(f"퀘이사존 크롤링 실패: {e}")
 
     return pd.DataFrame(deals)
 
 # --- 화면 출력 부분 ---
-if st.button("🔄 핫딜 목록 새로고침"):
+if st.button("🔄 당일 핫딜 새로고침"):
     st.cache_data.clear()
 
-df_deals = get_hot_deals()
+with st.spinner("오늘 뜬 핫딜을 불러오는 중..."):
+    df_deals = get_hot_deals()
 
 if not df_deals.empty:
+    st.success(f"오늘 올라온 총 {len(df_deals)}개의 핫딜을 가져왔어!")
     st.dataframe(
         df_deals,
         column_config={
@@ -80,4 +111,4 @@ if not df_deals.empty:
         use_container_width=True
     )
 else:
-    st.info("현재 불러올 수 있는 핫딜 정보가 없습니다.")
+    st.info("현재 불러올 수 있는 당일 핫딜 정보가 없어.")
