@@ -22,9 +22,8 @@ def fetch_deals():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
-    # --- [1] 뽐뿌 크롤링 (pmarket 장터게시판으로 수정!) ---
+    # --- [1] 뽐뿌 크롤링 (URL 중간 파라미터 무시 + 강력한 텍스트 추출) ---
     try:
-        # 유저님이 알려주신 정확한 pmarket 주소
         pp_url = "https://www.ppomppu.co.kr/zboard/zboard.php?id=pmarket"
         res = scraper.get(pp_url, headers=headers, timeout=10)
         
@@ -39,26 +38,25 @@ def fetch_deals():
                 a_tags = row.find_all('a')
                 title, link, time_str = None, None, None
                 
-                # 1. pmarket 게시글 링크 찾기
+                # 1. pmarket 게시글 링크 찾기 (조건 완화!)
                 for a in a_tags:
                     href = a.get('href', '')
-                    # 🚨 여기서 id=ppomppu만 찾던 바보 같은 조건을 id=pmarket으로 수정했습니다!
-                    if 'id=pmarket&no=' in href:
+                    # 🚨 URL 중간에 page나 divpage가 껴있어도 무조건 찾아냅니다.
+                    if 'id=pmarket' in href and 'no=' in href:
                         link = "https://www.ppomppu.co.kr/zboard/" + href
-                        font_tag = a.find('font', class_='list_title')
-                        title = font_tag.text.strip() if font_tag else a.text.strip()
-                        break
+                        
+                        # 폰트 태그가 있든 없든 a 태그 안의 텍스트를 우선 추출
+                        temp_title = a.text.strip()
+                        if temp_title: # 이미지 썸네일 링크 등 빈 텍스트 방지
+                            title = temp_title
+                            break
                 
-                # 2. 링크를 찾았다면 시간 추출
+                # 2. 링크와 제목을 찾았다면, 해당 줄에서 시간(00:00 또는 00:00:00) 스캔
                 if title and link:
-                    for td in row.find_all('td', class_='eng'):
-                        if ':' in td.text:
-                            match = re.search(r'\b(\d{2}:\d{2}(?::\d{2})?)\b', td.text)
-                            if match:
-                                time_str = match.group(1)
-                                break
-                                
-                    if time_str:
+                    # 복잡한 HTML 클래스 다 무시하고 그 줄의 텍스트 전체에서 시간 형식만 골라냄
+                    match = re.search(r'\b(\d{2}:\d{2}(?::\d{2})?)\b', row.text)
+                    if match:
+                        time_str = match.group(1)
                         results.append({'site': '뽐뿌', 'title': title, 'link': link, 'time': time_str})
                         count += 1
             
@@ -109,13 +107,13 @@ st.caption(f"최근 갱신 시간: {kst_now} (KST)")
 if st.button('🔄 새로고침'):
     st.rerun()
 
-with st.spinner('뽐뿌와 퀘이사존 데이터를 긁어오는 중입니다... 🚀'):
+with st.spinner('뽐뿌 장터와 퀘이사존 데이터를 긁어오는 중입니다... 🚀'):
     data, status = fetch_deals()
 
 # 📊 현황판
 st.subheader("📡 사이트별 수집 현황")
 cols = st.columns(4)
-cols[0].info(f"🔵 뽐뿌\n\n**{status['뽐뿌']}**")
+cols[0].info(f"🔵 뽐뿌 (장터)\n\n**{status['뽐뿌']}**")
 cols[1].success(f"🟠 퀘이사존\n\n**{status['퀘이사존']}**")
 cols[2].warning(f"🟢 아카라이브\n\n**{status['아카라이브']}**")
 cols[3].error(f"🟣 에펨코리아\n\n**{status['에펨코리아']}**")
