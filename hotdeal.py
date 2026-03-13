@@ -26,25 +26,26 @@ def fetch_deals():
             html = res.content.decode('euc-kr', 'replace')
             soup = BeautifulSoup(html, 'html.parser')
             
-            # 구조 변경 대비: tr.list0, tr.list1을 가져옴
             rows = soup.select('tr.list1, tr.list0')
             for row in rows:
-                title_tag = row.select_one('.list_title') # 폰트 태그 클래스 확인
+                title_tag = row.select_one('.list_title')
                 
                 if title_tag:
-                    # 1. 제목과 링크 추출
                     title = title_tag.text.strip()
-                    a_tag = title_tag.find_parent('a') # 제목을 감싸는 a 태그 찾기
+                    a_tag = title_tag.find_parent('a')
+                    
                     if a_tag and 'href' in a_tag.attrs:
                         link = "https://www.ppomppu.co.kr/zboard/" + a_tag['href']
                         
-                        # 2. 시간 추출
-                        time_tag = row.select_one('.eng.list_vspace') or row.select_one('td.eng')
-                        if time_tag:
-                            time_str = time_tag.text.strip()
-                            # 뽐뿌는 오늘 글이 '14:20' 처럼 시간으로 표시됨
-                            if ":" in time_str: 
-                                results.append({'site': '뽐뿌', 'title': title, 'link': link, 'time': time_str})
+                        # 🚨 [수정된 부분] 게시글 번호에 속지 않고 '시간' 데이터만 골라내기
+                        time_str = ""
+                        for tag in row.select('.eng'):
+                            if ":" in tag.text: # 텍스트 안에 ':' (콜론)이 있어야만 당일 시간 데이터로 인정
+                                time_str = tag.text.strip()
+                                break # 시간을 찾았으니 더 이상 찾지 않고 멈춤
+                        
+                        if time_str:
+                            results.append({'site': '뽐뿌', 'title': title, 'link': link, 'time': time_str})
         else:
             st.error(f"뽐뿌 접속 실패: 응답 코드 {res.status_code}")
     except Exception as e:
@@ -57,25 +58,18 @@ def fetch_deals():
         
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            
-            # 퀘이사존 구조 변경 대비: 게시글 링크(.subject-link)를 전부 찾은 후 역추적
             links = soup.select('a.subject-link')
             
             for a_tag in links:
-                # 1. 제목 추출
                 title_tag = a_tag.select_one('.tit')
                 title = title_tag.text.strip() if title_tag else a_tag.text.strip()
-                
-                # 2. 링크 추출
                 link = "https://quasarzone.com" + a_tag['href']
                 
-                # 3. 시간 추출 (해당 게시글을 감싸는 상위 박스로 올라가서 날짜 클래스 찾기)
                 parent = a_tag.find_parent(['div', 'tr', 'li'])
                 if parent:
                     time_tag = parent.select_one('span.date')
                     if time_tag:
                         time_str = time_tag.text.strip()
-                        # 퀘이사존은 오늘 글이 "14:20" 또는 "방금 전", "분 전" 등으로 표시됨
                         if ":" in time_str or "전" in time_str:
                             results.append({'site': '퀘이사존', 'title': title, 'link': link, 'time': time_str})
         else:
@@ -89,7 +83,6 @@ def fetch_deals():
 st.set_page_config(page_title="실시간 핫딜 모니터링", layout="wide")
 st.title("🔥 오늘의 실시간 핫딜 (KST 기준)")
 
-# 화면 상단에 현재 KST 시간 표시
 kst_now = datetime.now(pytz.timezone('Asia/Seoul')).strftime('%Y-%m-%d %H:%M:%S')
 st.caption(f"서버 데이터 갱신 시간: {kst_now}")
 
