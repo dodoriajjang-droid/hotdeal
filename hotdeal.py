@@ -5,9 +5,8 @@ import pandas as pd
 
 # --- Streamlit UI 기본 설정 ---
 st.set_page_config(layout="wide")
-st.title("🔥 실시간 핫딜 모아보기 (디버깅 모드)")
+st.title("🔥 실시간 핫딜 모아보기 (날짜 확인 모드)")
 
-# --- 크롤링 함수 ---
 @st.cache_data(ttl=300) 
 def get_hot_deals():
     deals = []
@@ -27,14 +26,18 @@ def get_hot_deals():
             if not title_tag: continue
             title = title_tag.text.strip()
             
+            # 링크 추출
             a_tag = row.select_one("a")
             link = "https://www.ppomppu.co.kr/zboard/" + a_tag['href'] if a_tag else ""
             
-            # 뽐뿌 날짜/시간 확인 (오늘 글이면 콜론이 포함됨)
-            date_text = row.text 
-            is_today = ":" in date_text 
+            # [수정됨] 뽐뿌 등록일 추출 (클래스가 eng list_vspace인 td 태그들 중 첫 번째가 날짜)
+            td_dates = row.select("td.eng.list_vspace")
+            date_str = td_dates[0].text.strip() if td_dates else "알수없음"
             
-            deals.append({"출처": "뽐뿌", "상품명": title, "게시글 링크": link, "오늘글": is_today})
+            # 콜론(:)이 있으면 오늘 올라온 글 (시간 표시)
+            is_today = ":" in date_str 
+            
+            deals.append({"출처": "뽐뿌", "등록일": date_str, "상품명": title, "게시글 링크": link, "오늘글": is_today})
     except Exception as e:
         st.error(f"뽐뿌 크롤링 실패: {e}")
 
@@ -52,34 +55,34 @@ def get_hot_deals():
             a_tag = item.select_one("a.subject-link") or item.select_one("p.tit a")
             link = "https://quasarzone.com" + a_tag['href'] if a_tag else ""
             
+            # [수정됨] 퀘이사존 등록일 추출 (span 태그 중 클래스가 date인 것)
             date_span = item.select_one("span.date")
-            date_text = date_span.text.strip() if date_span else ""
-            is_today = ":" in date_text
+            date_str = date_span.text.strip() if date_span else "알수없음"
             
-            deals.append({"출처": "퀘이사존", "상품명": title, "게시글 링크": link, "오늘글": is_today})
+            # 콜론(:)이 있으면 오늘 올라온 글 (시간 표시)
+            is_today = ":" in date_text if 'date_text' in locals() else (":" in date_str)
+            
+            deals.append({"출처": "퀘이사존", "등록일": date_str, "상품명": title, "게시글 링크": link, "오늘글": is_today})
     except Exception as e:
         st.error(f"퀘이사존 크롤링 실패: {e}")
 
     return pd.DataFrame(deals)
 
 # --- 화면 출력 부분 ---
-# 테스트를 위한 체크박스 추가
 show_only_today = st.checkbox("오늘 올라온 핫딜만 보기 (체크 해제 시 전체 보기)", value=True)
 
 if st.button("🔄 새로고침"):
     st.cache_data.clear()
 
-with st.spinner("핫딜 데이터를 불러오는 중..."):
+with st.spinner("데이터를 불러오는 중..."):
     df_deals = get_hot_deals()
 
 if not df_deals.empty:
-    # 체크박스 상태에 따라 데이터 필터링
     if show_only_today:
         filtered_df = df_deals[df_deals["오늘글"] == True]
     else:
         filtered_df = df_deals
         
-    # '오늘글' 컬럼은 화면에 보여줄 필요 없으니 제외
     display_df = filtered_df.drop(columns=["오늘글"])
     
     if not display_df.empty:
@@ -88,6 +91,7 @@ if not df_deals.empty:
             display_df,
             column_config={
                 "출처": st.column_config.TextColumn("출처", width="small"),
+                "등록일": st.column_config.TextColumn("등록일", width="small"),
                 "상품명": st.column_config.TextColumn("상품명", width="large"),
                 "게시글 링크": st.column_config.LinkColumn("게시글 링크 (클릭하여 이동)")
             },
@@ -95,6 +99,6 @@ if not df_deals.empty:
             use_container_width=True
         )
     else:
-        st.warning("전체 데이터는 가져왔는데, '오늘' 올라온 글은 필터링에서 다 걸러진 것 같아.")
+        st.warning("전체 데이터는 가져왔는데, '오늘' 올라온 글이 없거나 필터링에 실패했어. 체크박스를 풀고 등록일 컬럼을 확인해 봐!")
 else:
-    st.error("앗, 사이트에서 데이터를 아예 못 가져오고 있어. (봇 차단 또는 사이트 구조 변경 의심)")
+    st.error("데이터를 가져오지 못했어.")
