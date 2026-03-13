@@ -22,35 +22,43 @@ def fetch_deals():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
-    # --- [1] 뽐뿌 크롤링 (역추적 방식 적용!) ---
+    # --- [1] 뽐뿌 크롤링 (pmarket 장터게시판으로 수정!) ---
     try:
-        pp_url = "https://www.ppomppu.co.kr/zboard/zboard.php?id=ppomppu"
+        # 유저님이 알려주신 정확한 pmarket 주소
+        pp_url = "https://www.ppomppu.co.kr/zboard/zboard.php?id=pmarket"
         res = scraper.get(pp_url, headers=headers, timeout=10)
         
         if res.status_code == 200:
             html = res.content.decode('euc-kr', 'replace')
             soup = BeautifulSoup(html, 'html.parser')
             
-            # 1. 뽐뿌의 고유한 '제목 폰트 클래스'를 싹 다 찾습니다.
-            title_fonts = soup.find_all('font', class_='list_title')
+            rows = soup.find_all('tr')
             count = 0
             
-            for font in title_fonts:
-                title = font.text.strip()
+            for row in rows:
+                a_tags = row.find_all('a')
+                title, link, time_str = None, None, None
                 
-                # 2. 제목을 감싸는 링크(a) 태그 찾기
-                a_tag = font.find_parent('a')
-                if not a_tag or 'href' not in a_tag.attrs:
-                    continue
-                link = "https://www.ppomppu.co.kr/zboard/" + a_tag['href']
+                # 1. pmarket 게시글 링크 찾기
+                for a in a_tags:
+                    href = a.get('href', '')
+                    # 🚨 여기서 id=ppomppu만 찾던 바보 같은 조건을 id=pmarket으로 수정했습니다!
+                    if 'id=pmarket&no=' in href:
+                        link = "https://www.ppomppu.co.kr/zboard/" + href
+                        font_tag = a.find('font', class_='list_title')
+                        title = font_tag.text.strip() if font_tag else a.text.strip()
+                        break
                 
-                # 3. 제목이 있는 그 '줄(tr)' 전체를 찾아서 시간 추출하기
-                tr = font.find_parent('tr')
-                if tr:
-                    # 줄 전체 텍스트에서 XX:XX:XX 또는 XX:XX 형태의 숫자 스캔
-                    match = re.search(r'\b(\d{2}:\d{2}(?::\d{2})?)\b', tr.text)
-                    if match:
-                        time_str = match.group(1)
+                # 2. 링크를 찾았다면 시간 추출
+                if title and link:
+                    for td in row.find_all('td', class_='eng'):
+                        if ':' in td.text:
+                            match = re.search(r'\b(\d{2}:\d{2}(?::\d{2})?)\b', td.text)
+                            if match:
+                                time_str = match.group(1)
+                                break
+                                
+                    if time_str:
                         results.append({'site': '뽐뿌', 'title': title, 'link': link, 'time': time_str})
                         count += 1
             
@@ -60,7 +68,7 @@ def fetch_deals():
     except Exception as e:
         status['뽐뿌'] = f"🔴 에러: {str(e)[:15]}"
 
-    # --- [2] 퀘이사존 크롤링 (성공 로직 유지) ---
+    # --- [2] 퀘이사존 크롤링 ---
     try:
         qs_url = "https://quasarzone.com/bbs/qb_saleinfo"
         res = scraper.get(qs_url, headers=headers, timeout=10)
