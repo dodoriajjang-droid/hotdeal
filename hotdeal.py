@@ -1,29 +1,54 @@
 import streamlit as st
 import cloudscraper
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import re
 import requests
-from streamlit_autorefresh import st_autorefresh  # 자동 새로고침 라이브러리
+from streamlit_autorefresh import st_autorefresh
 
 # ==========================================
-# 🚨 텔레그램 설정 (여기에 본인의 정보를 입력하세요!)
-TELEGRAM_TOKEN = "여기에_봇파더에게_받은_토큰_입력"
-TELEGRAM_CHAT_ID = "여기에_내_챗아이디_입력"
+# 🚨 텔레그램 설정 (스트림릿 Secrets 사용 권장!)
+try:
+    TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
+    TELEGRAM_CHAT_ID = st.secrets["TELEGRAM_CHAT_ID"]
+except Exception:
+    TELEGRAM_TOKEN = None
+    TELEGRAM_CHAT_ID = None
 # ==========================================
 
-# 이미 알림을 보낸 핫딜 링크를 기억해두는 저장소 (중복 전송 방지)
 if 'sent_deals' not in st.session_state:
     st.session_state.sent_deals = set()
 
 def get_kst_today():
     return datetime.now(pytz.timezone('Asia/Seoul')).strftime('%Y-%m-%d')
 
-# 텔레그램 발송 함수
+# 🕒 제각각인 시간 텍스트를 파이썬 진짜 시간(datetime)으로 변환하는 마법의 함수
+def parse_time_for_sort(time_str):
+    now = datetime.now(pytz.timezone('Asia/Seoul'))
+    try:
+        if "방금" in time_str:
+            return now
+        elif "분 전" in time_str:
+            minutes = int(re.search(r'\d+', time_str).group())
+            return now - timedelta(minutes=minutes)
+        elif "시간 전" in time_str:
+            hours = int(re.search(r'\d+', time_str).group())
+            return now - timedelta(hours=hours)
+        else:
+            # 14:20:11 또는 14:20 형태 처리
+            parts = time_str.split(':')
+            if len(parts) == 3:
+                return now.replace(hour=int(parts[0]), minute=int(parts[1]), second=int(parts[2]), microsecond=0)
+            elif len(parts) == 2:
+                return now.replace(hour=int(parts[0]), minute=int(parts[1]), second=0, microsecond=0)
+    except:
+        pass
+    # 파싱 실패 시 가장 과거의 시간으로 밀어버림
+    return datetime.min.replace(tzinfo=pytz.timezone('Asia/Seoul'))
+
 def send_telegram_message(title, link, site):
-    # 토큰 설정을 안 했다면 무시
-    if TELEGRAM_TOKEN == "여기에_봇파더에게_받은_토큰_입력":
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
         
     text = f"🔥 *[{site}] 신규 핫딜!*\n[{title}]({link})"
@@ -41,14 +66,14 @@ def send_telegram_message(title, link, site):
 
 def fetch_deals():
     results = []
-    status = {'뽐뿌': '🔴 대기', '퀘이사존': '🔴 대기', '아카라이브': '🔒 클라우드 IP 차단됨', '에펨코리아': '🔒 클라우드 IP 차단됨'}
+    status = {'뽐뿌': '🔴 대기', '퀘이사존': '🔴 대기', '아카라이브': '🔒 차단됨', '에펨코리아': '🔒 차단됨'}
     
     scraper = cloudscraper.create_scraper()
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
-    # --- [1] 뽐뿌 크롤링 ---
+    # --- [1] 뽐뿌 장터 크롤링 ---
     try:
         pp_url = "https://www.ppomppu.co.kr/zboard/zboard.php?id=pmarket"
         res = scraper.get(pp_url, headers=headers, timeout=10)
@@ -79,16 +104,11 @@ def fetch_deals():
                         results.append({'site': '뽐뿌', 'title': title, 'link': link, 'time': time_str})
                         count += 1
                         
-                        # ✨ 신규 핫딜이면 텔레그램 전송 후 기록!
-                        if link not in st.session_state.sent_deals:
-                            send_telegram_message(title, link, "뽐뿌")
-                            st.session_state.sent_deals.add(link)
-                            
-            status['뽐뿌'] = f"🟢 성공 ({count}개)" if count > 0 else "🟡 파싱 실패 (당일 글 없음)"
+            status['뽐뿌'] = f"🟢 성공 ({count}개)" if count > 0 else "🟡 당일 글 없음"
         else:
             status['뽐뿌'] = f"🔴 접속 차단 ({res.status_code})"
     except Exception as e:
-        status['뽐뿌'] = f"🔴 에러: {str(e)[:15]}"
+        status['뽐뿌'] = f"🔴 에러"
 
     # --- [2] 퀘이사존 크롤링 ---
     try:
@@ -113,25 +133,27 @@ def fetch_deals():
                         if ":" in time_str or "전" in time_str:
                             results.append({'site': '퀘이사존', 'title': title, 'link': link, 'time': time_str})
                             count += 1
-                            
-                            # ✨ 신규 핫딜이면 텔레그램 전송 후 기록!
-                            if link not in st.session_state.sent_deals:
-                                send_telegram_message(title, link, "퀘이사존")
-                                st.session_state.sent_deals.add(link)
                                 
             status['퀘이사존'] = f"🟢 성공 ({count}개)" if count > 0 else "🟡 파싱 실패"
         else:
             status['퀘이사존'] = f"🔴 접속 차단 ({res.status_code})"
     except Exception as e:
-        status['퀘이사존'] = f"🔴 에러: {str(e)[:15]}"
+        status['퀘이사존'] = f"🔴 에러"
+
+    # ✨ 핵심: 모든 데이터를 모은 뒤, 시간 최신순으로 정렬합니다.
+    results.sort(key=lambda x: parse_time_for_sort(x['time']), reverse=True)
+
+    # 정렬된 순서대로 텔레그램 전송 (최신 글부터 알림이 가도록)
+    for item in results:
+         if item['link'] not in st.session_state.sent_deals:
+             send_telegram_message(item['title'], item['link'], item['site'])
+             st.session_state.sent_deals.add(item['link'])
 
     return results, status
 
 # --- Streamlit UI ---
 st.set_page_config(page_title="실시간 핫딜 모니터링", layout="wide")
 
-# ⏱️ 5분(300,000 밀리초)마다 자동으로 페이지를 새로고침합니다.
-# 브라우저 창을 켜두기만 하면 알아서 작동합니다.
 refresh_count = st_autorefresh(interval=300000, limit=None, key="deal_autorefresh")
 
 st.title("🔥 통합 실시간 핫딜 모니터링")
